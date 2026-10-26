@@ -6,13 +6,18 @@
   "additionalProperties": false,
   "required": [
     "CONFIG_CONTRACT_VERSION",
-    "APP_MODE",
-    "AUTH_MODE",
     "DEV_TENANT_ID",
+    "GCP_PROJECT_ID",
+    "GCP_REGION",
     "GCS_DOCUMENT_BUCKET",
     "TENANT_UPLOAD_PREFIX",
     "FIXED_CORPUS",
+    "PUBSUB_TOPIC",
     "PUBSUB_WORKER_AUDIENCE",
+    "ACTIVE_INDEX_VERSION",
+    "VECTOR_SEARCH_INDEX_RESOURCE",
+    "VECTOR_SEARCH_ENDPOINT_RESOURCE",
+    "VECTOR_SEARCH_DEPLOYED_INDEX_ID",
     "PIPELINE_VERSION",
     "PARSER_VERSION",
     "CHUNKER_VERSION",
@@ -44,45 +49,44 @@
   ],
   "properties": {
     "CONFIG_CONTRACT_VERSION": { "const": "1.0.0" },
-    "APP_MODE": { "enum": ["local", "gcp"] },
-    "AUTH_MODE": { "enum": ["local_signed", "cloud_run_iam"] },
-    "DEV_TENANT_ID": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
-    "GCS_DOCUMENT_BUCKET": { "type": "string", "minLength": 3, "maxLength": 63, "pattern": "^[a-z0-9][a-z0-9._-]*[a-z0-9]$" },
-    "TENANT_UPLOAD_PREFIX": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
-    "FIXED_CORPUS": { "const": "default" },
-    "PUBSUB_WORKER_AUDIENCE": { "type": "string", "format": "uri", "minLength": 1, "maxLength": 2048 },
-    "LOCAL_AUTH_SIGNING_KEY_FILE": {
+    "DEV_TENANT_ID": {
       "type": "string",
       "minLength": 1,
-      "description": "Local-only path to a mounted development signing key; never an inline secret and never valid in gcp mode."
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
     },
     "GCP_PROJECT_ID": { "$ref": "#/$defs/cloudString" },
     "GCP_REGION": { "$ref": "#/$defs/cloudString" },
-    "TF_STATE_PROJECT_ID": { "$ref": "#/$defs/cloudString" },
-    "TF_STATE_BUCKET_NAME": { "$ref": "#/$defs/cloudString" },
-    "TF_STATE_BUCKET_LOCATION": { "$ref": "#/$defs/cloudString" },
-    "ARTIFACT_REGISTRY_REPOSITORY": { "$ref": "#/$defs/cloudString" },
-    "DEV_OPERATOR_GROUP": { "$ref": "#/$defs/cloudString" },
-    "ALERT_EMAIL": { "type": "string", "format": "email" },
-    "BUDGET_AMOUNT_USD": { "type": "number", "exclusiveMinimum": 0 },
-    "VECTOR_SEARCH_SHARD_SIZE": { "enum": ["SHARD_SIZE_SMALL", "SHARD_SIZE_MEDIUM", "SHARD_SIZE_LARGE"] },
-    "LOG_RETENTION_DAYS": { "type": "integer", "minimum": 1, "maximum": 3650 },
-    "SOURCE_REPOSITORY": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "GCS_DOCUMENT_BUCKET": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 63,
+      "pattern": "^[a-z0-9][a-z0-9._-]*[a-z0-9]$"
+    },
+    "TENANT_UPLOAD_PREFIX": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+    },
+    "FIXED_CORPUS": { "const": "default" },
+    "PUBSUB_TOPIC": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+    "PUBSUB_WORKER_AUDIENCE": {
+      "type": "string",
+      "format": "uri",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^https://"
+    },
+    "ACTIVE_INDEX_VERSION": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
+    "VECTOR_SEARCH_INDEX_RESOURCE": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "VECTOR_SEARCH_ENDPOINT_RESOURCE": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "VECTOR_SEARCH_DEPLOYED_INDEX_ID": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
     "PIPELINE_VERSION": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
     "PARSER_VERSION": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
     "CHUNKER_VERSION": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z0-9._-]+$" },
-    "GENERATION_MODEL_ID": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256,
-      "description": "Pinned immutable/GA model identifier in gcp mode; mutable aliases are forbidden."
-    },
-    "EMBEDDING_MODEL_ID": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256,
-      "description": "Pinned immutable/GA model identifier in gcp mode; mutable aliases are forbidden."
-    },
+    "GENERATION_MODEL_ID": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "EMBEDDING_MODEL_ID": { "type": "string", "minLength": 1, "maxLength": 256 },
     "EMBEDDING_DIMENSIONS": { "type": "integer", "minimum": 1, "maximum": 10000 },
     "MAX_DOCUMENT_BYTES": { "type": "integer", "minimum": 1, "maximum": 52428800 },
     "MAX_DOCUMENT_CHUNKS": { "type": "integer", "minimum": 1, "maximum": 10000 },
@@ -105,13 +109,7 @@
     "EMBEDDING_MAX_RETRIES": { "type": "integer", "minimum": 0, "maximum": 10 },
     "WORKER_CONCURRENCY": { "type": "integer", "minimum": 1, "maximum": 100 },
     "API_MAX_INSTANCES": { "type": "integer", "minimum": 1, "maximum": 100 },
-    "WORKER_MAX_INSTANCES": { "type": "integer", "minimum": 1, "maximum": 100 },
-    "LOCAL_METADATA_ENDPOINT": { "$ref": "#/$defs/localEndpoint" },
-    "LOCAL_GCS_ENDPOINT": { "$ref": "#/$defs/localEndpoint" },
-    "LOCAL_PUBSUB_ENDPOINT": { "$ref": "#/$defs/localEndpoint" },
-    "LOCAL_EMBEDDING_ENDPOINT": { "$ref": "#/$defs/localEndpoint" },
-    "LOCAL_VECTOR_ENDPOINT": { "$ref": "#/$defs/localEndpoint" },
-    "LOCAL_GENERATION_ENDPOINT": { "$ref": "#/$defs/localEndpoint" }
+    "WORKER_MAX_INSTANCES": { "type": "integer", "minimum": 1, "maximum": 100 }
   },
   "$defs": {
     "cloudString": {
@@ -119,58 +117,6 @@
       "minLength": 1,
       "maxLength": 256,
       "not": { "pattern": "(PLACEHOLDER|placeholder|CHANGEME|changeme|TODO|todo|TBD|tbd)" }
-    },
-    "localEndpoint": {
-      "type": "string",
-      "format": "uri",
-      "pattern": "^https?://",
-      "maxLength": 2048
     }
-  },
-  "allOf": [
-    {
-      "if": { "properties": { "APP_MODE": { "const": "local" } }, "required": ["APP_MODE"] },
-      "then": {
-        "properties": { "AUTH_MODE": { "const": "local_signed" } },
-        "required": [
-          "LOCAL_AUTH_SIGNING_KEY_FILE",
-          "LOCAL_METADATA_ENDPOINT",
-          "LOCAL_GCS_ENDPOINT",
-          "LOCAL_PUBSUB_ENDPOINT",
-          "LOCAL_EMBEDDING_ENDPOINT",
-          "LOCAL_VECTOR_ENDPOINT",
-          "LOCAL_GENERATION_ENDPOINT"
-        ]
-      }
-    },
-    {
-      "if": { "properties": { "APP_MODE": { "const": "gcp" } }, "required": ["APP_MODE"] },
-      "then": {
-        "properties": {
-          "AUTH_MODE": { "const": "cloud_run_iam" },
-          "LOCAL_AUTH_SIGNING_KEY_FILE": false,
-          "LOCAL_METADATA_ENDPOINT": false,
-          "LOCAL_GCS_ENDPOINT": false,
-          "LOCAL_PUBSUB_ENDPOINT": false,
-          "LOCAL_EMBEDDING_ENDPOINT": false,
-          "LOCAL_VECTOR_ENDPOINT": false,
-          "LOCAL_GENERATION_ENDPOINT": false
-        },
-        "required": [
-          "GCP_PROJECT_ID",
-          "GCP_REGION",
-          "TF_STATE_PROJECT_ID",
-          "TF_STATE_BUCKET_NAME",
-          "TF_STATE_BUCKET_LOCATION",
-          "ARTIFACT_REGISTRY_REPOSITORY",
-          "DEV_OPERATOR_GROUP",
-          "ALERT_EMAIL",
-          "BUDGET_AMOUNT_USD",
-          "VECTOR_SEARCH_SHARD_SIZE",
-          "LOG_RETENTION_DAYS",
-          "SOURCE_REPOSITORY"
-        ]
-      }
-    }
-  ]
+  }
 }

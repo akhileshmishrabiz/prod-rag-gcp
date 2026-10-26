@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,7 +11,6 @@ import pytest
 import yaml  # type: ignore[import-untyped]
 from fastapi.testclient import TestClient
 
-from packages.rag_core.config import AppMode, AuthMode
 from packages.rag_core.errors import ErrorCode, RagError
 from packages.rag_core.models import (
     ActiveIndexRecord,
@@ -27,8 +26,7 @@ from packages.rag_core.models import (
 )
 from packages.rag_core.policy import build_datapoint
 from packages.rag_core.retrieval import RetrievalLimits, RetrievalService
-from services.api.app.auth import issue_local_token
-from services.api.app.dependencies import ApiDependencies, ApiPolicy
+from services.api.app.dependencies import ApiDependencies
 from services.api.app.main import create_app
 from services.api.app.openapi import semantic_surface
 from tests.fakes import (
@@ -86,28 +84,14 @@ def _dependencies() -> tuple[ApiDependencies, FakeMetadataStore, FakeVectorIndex
         retrieval=retrieval,
         clock=FakeClock(now),
         ids=FakeIds(),
-        policy=ApiPolicy(),
     )
     return dependencies, metadata, vectors
 
 
 def _client(
-    local_settings: Any, tmp_path: Path, dependencies: ApiDependencies
+    runtime_settings: Any, dependencies: ApiDependencies
 ) -> tuple[TestClient, dict[str, str]]:
-    key_path = tmp_path / "local-auth.key"
-    key = b"offline-test-signing-key"
-    key_path.write_bytes(key)
-    settings = local_settings.model_copy(update={"local_auth_signing_key_file": key_path})
-    token = issue_local_token(
-        key=key,
-        identity=dependencies.policy.local_test_identity,
-        tenant_id=settings.dev_tenant_id,
-        expires_at=dependencies.clock.now() + timedelta(minutes=5),
-    )
-    return (
-        TestClient(create_app(lambda: settings, dependencies)),
-        {"Authorization": f"Bearer {token}"},
-    )
+    return TestClient(create_app(lambda: runtime_settings, dependencies)), {}
 
 
 def _add_ready_evidence(
@@ -173,12 +157,9 @@ def _add_ready_evidence(
     )
 
 
-def test_local_auth_is_signed_and_tenant_is_not_caller_selectable(
-    local_settings: Any, tmp_path: Path
-) -> None:
+def test_tenant_is_not_caller_selectable(runtime_settings: Any) -> None:
     dependencies, _, _ = _dependencies()
-    client, headers = _client(local_settings, tmp_path, dependencies)
-    assert client.post("/v1/query", json={"question": "hello"}).status_code == 401
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -188,13 +169,11 @@ def test_local_auth_is_signed_and_tenant_is_not_caller_selectable(
     assert response.json()["code"] == "INVALID_REQUEST"
 
 
-def test_query_uses_restrictions_and_returns_verified_citation(
-    local_settings: Any, tmp_path: Path
-) -> None:
+def test_query_uses_restrictions_and_returns_verified_citation(runtime_settings: Any) -> None:
     dependencies, metadata, vectors = _dependencies()
     question = "What is the policy?"
     _add_ready_evidence(metadata, vectors, question)
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -216,11 +195,9 @@ def test_query_uses_restrictions_and_returns_verified_citation(
     assert restrictions.active_generations
 
 
-def test_no_active_generation_abstains_before_vector_call(
-    local_settings: Any, tmp_path: Path
-) -> None:
+def test_no_active_generation_abstains_before_vector_call(runtime_settings: Any) -> None:
     dependencies, _, vectors = _dependencies()
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -232,7 +209,7 @@ def test_no_active_generation_abstains_before_vector_call(
     assert not any(method == "search" for method, _ in vectors.calls)
 
 
-def test_cross_tenant_hydrated_chunk_is_discarded(local_settings: Any, tmp_path: Path) -> None:
+def test_cross_tenant_hydrated_chunk_is_discarded(runtime_settings: Any) -> None:
     dependencies, metadata, vectors = _dependencies()
     question = "What is the policy?"
     _add_ready_evidence(metadata, vectors, question)
@@ -240,7 +217,7 @@ def test_cross_tenant_hydrated_chunk_is_discarded(local_settings: Any, tmp_path:
     metadata.chunks[("doc-1", 1, "vector-1")] = original.model_copy(
         update={"tenant_id": "other-tenant"}
     )
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -250,15 +227,13 @@ def test_cross_tenant_hydrated_chunk_is_discarded(local_settings: Any, tmp_path:
     assert response.json()["abstained"] is True
 
 
-def test_tombstone_blocks_query_before_delete_processing(
-    local_settings: Any, tmp_path: Path
-) -> None:
+def test_tombstone_blocks_query_before_delete_processing(runtime_settings: Any) -> None:
     dependencies, metadata, vectors = _dependencies()
     question = "What is the policy?"
     _add_ready_evidence(metadata, vectors, question)
     metadata.tombstone("dev-tenant", "doc-1", dependencies.clock.now())
     vectors.calls.clear()
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -277,13 +252,13 @@ class _UnsupportedCitationGenerator(FakeGenerator):
         )
 
 
-def test_unsupported_citation_forces_abstention(local_settings: Any, tmp_path: Path) -> None:
+def test_unsupported_citation_forces_abstention(runtime_settings: Any) -> None:
     dependencies, metadata, vectors = _dependencies()
     question = "What is the policy?"
     _add_ready_evidence(metadata, vectors, question)
     retrieval = dependencies.retrieval
     retrieval.generator = _UnsupportedCitationGenerator()
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/query",
         headers=headers,
@@ -294,7 +269,7 @@ def test_unsupported_citation_forces_abstention(local_settings: Any, tmp_path: P
     assert response.json()["citations"] == []
 
 
-def test_document_registration_get_and_tombstone(local_settings: Any, tmp_path: Path) -> None:
+def test_document_registration_get_and_tombstone(runtime_settings: Any) -> None:
     dependencies, metadata, _ = _dependencies()
     content = b"registered content"
     checksum = hashlib.sha256(content).hexdigest()
@@ -313,7 +288,7 @@ def test_document_registration_get_and_tombstone(local_settings: Any, tmp_path: 
         ),
         content,
     )
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     response = client.post(
         "/v1/documents",
         headers=headers,
@@ -335,8 +310,35 @@ def test_document_registration_get_and_tombstone(local_settings: Any, tmp_path: 
     assert metadata.list_active_generations("dev-tenant", "default", 100) == []
 
 
-def test_generated_openapi_semantically_matches_contract(local_settings: Any) -> None:
-    app = create_app(lambda: local_settings)
+def test_upload_writes_and_registers(runtime_settings: Any) -> None:
+    dependencies, metadata, _ = _dependencies()
+    client, headers = _client(runtime_settings, dependencies)
+    response = client.post(
+        "/v1/documents/upload",
+        headers=headers,
+        files={"file": ("notes.md", b"# Title\n\nBody text here.", "text/markdown")},
+    )
+    assert response.status_code == 202
+    body = response.json()
+    assert body["document_id"] == "notes"
+    assert metadata.get_document("dev-tenant", "notes") is not None
+
+
+def test_upload_sanitizes_document_id_from_filename(runtime_settings: Any) -> None:
+    dependencies, metadata, _ = _dependencies()
+    client, headers = _client(runtime_settings, dependencies)
+    response = client.post(
+        "/v1/documents/upload",
+        headers=headers,
+        files={"file": ("my notes.txt", b"hello", "text/plain")},
+    )
+    assert response.status_code == 202
+    assert response.json()["document_id"] == "my-notes"
+    assert metadata.get_document("dev-tenant", "my-notes") is not None
+
+
+def test_generated_openapi_semantically_matches_contract(runtime_settings: Any) -> None:
+    app = create_app(lambda: runtime_settings)
     schema = app.openapi()
     contract_path = Path(__file__).parents[2] / "contracts" / "openapi" / "openapi.v1.yaml"
     contract = cast(dict[str, Any], yaml.safe_load(contract_path.read_text()))
@@ -437,25 +439,15 @@ def test_empty_citations_abstain_and_context_bounds_apply() -> None:
     assert [chunk.ordinal for chunk in bounded] == [0, 2]
 
 
-def test_api_validation_auth_and_dependency_error_paths(
-    local_settings: Any, tmp_path: Path
-) -> None:
+def test_api_validation_and_dependency_error_paths(runtime_settings: Any) -> None:
     dependencies, _, _ = _dependencies()
-    client, headers = _client(local_settings, tmp_path, dependencies)
-    assert (
-        client.post(
-            "/v1/query",
-            headers={"Authorization": "Bearer malformed"},
-            json={"question": "hello"},
-        ).status_code
-        == 401
-    )
+    client, headers = _client(runtime_settings, dependencies)
     assert client.post("/v1/query", headers=headers, json={"question": "   "}).status_code == 400
     assert (
         client.post(
             "/v1/query",
             headers=headers,
-            json={"question": "x" * (local_settings.max_query_input_chars + 1)},
+            json={"question": "x" * (runtime_settings.max_query_input_chars + 1)},
         ).status_code
         == 422
     )
@@ -467,19 +459,9 @@ def test_api_validation_auth_and_dependency_error_paths(
     )
     assert client.get("/v1/documents/missing", headers=headers).status_code == 404
 
-    cloud_settings = local_settings.model_copy(
-        update={
-            "app_mode": AppMode.GCP,
-            "auth_mode": AuthMode.CLOUD_RUN_IAM,
-            "local_auth_signing_key_file": None,
-        }
-    )
-    cloud_client = TestClient(create_app(lambda: cloud_settings, dependencies))
-    assert cloud_client.post("/v1/query", json={"question": "hello"}).status_code == 200
-
 
 def test_registration_rejects_prefix_generation_and_media_mismatches(
-    local_settings: Any, tmp_path: Path
+    runtime_settings: Any,
 ) -> None:
     dependencies, _, _ = _dependencies()
     content = b"registered content"
@@ -504,7 +486,7 @@ def test_registration_rejects_prefix_generation_and_media_mismatches(
             ),
             content,
         )
-    client, headers = _client(local_settings, tmp_path, dependencies)
+    client, headers = _client(runtime_settings, dependencies)
     base = {
         "document_id": "doc-api",
         "object_generation": 7,
@@ -539,10 +521,10 @@ def test_registration_rejects_prefix_generation_and_media_mismatches(
 
 
 def test_readiness_rejects_incompatible_active_index(
-    local_settings: Any,
+    runtime_settings: Any,
 ) -> None:
     dependencies, metadata, _ = _dependencies()
     metadata.active_index = metadata.active_index.model_copy(update={"chunker_version": "other"})
-    response = TestClient(create_app(lambda: local_settings, dependencies)).get("/readyz")
+    response = TestClient(create_app(lambda: runtime_settings, dependencies)).get("/readyz")
     assert response.status_code == 503
     assert response.json()["code"] == "CONFIGURATION_INVALID"

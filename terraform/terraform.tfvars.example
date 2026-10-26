@@ -1,0 +1,8 @@
+project_id   = "my-gcp-project"
+region       = "us-central1"
+tenant_id    = "main"
+api_invokers = ["user:you@example.com"]
+
+# Build and push images first, then set digests here:
+api_image    = "us-central1-docker.pkg.dev/my-gcp-project/rag-main-images/api:latest"
+worker_image = "us-central1-docker.pkg.dev/my-gcp-project/rag-main-images/worker:latest"

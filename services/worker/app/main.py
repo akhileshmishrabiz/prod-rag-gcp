@@ -15,6 +15,8 @@ from services.worker.app.routes import router as ingestion_router
 def create_app(
     settings_loader: Callable[[], RuntimeSettings] = load_settings,
     dependencies: WorkerDependencies | None = None,
+    *,
+    wire_gcp: bool = False,
 ) -> FastAPI:
     """Build the worker with injectable configuration and business ports."""
     app = FastAPI(title="Development RAG Worker", version="1.0.0")
@@ -24,10 +26,17 @@ def create_app(
     except ConfigurationError as error:
         app.state.settings = None
         app.state.configuration_error = error
-    app.state.dependencies = dependencies
+    if dependencies is not None:
+        app.state.dependencies = dependencies
+    elif wire_gcp and app.state.settings is not None:
+        from services.composition.gcp import build_worker_dependencies
+
+        app.state.dependencies = build_worker_dependencies(app.state.settings)
+    else:
+        app.state.dependencies = None
     app.include_router(probe_router)
     app.include_router(ingestion_router)
     return app
 
 
-app = create_app()
+app = create_app(wire_gcp=True)

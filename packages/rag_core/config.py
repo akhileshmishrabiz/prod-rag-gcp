@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
-from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import (
     AnyUrl,
-    EmailStr,
     Field,
     StringConstraints,
     UrlConstraints,
@@ -39,32 +36,11 @@ UploadPrefix = Annotated[
     str, StringConstraints(min_length=1, max_length=512, pattern=_UPLOAD_PREFIX)
 ]
 HttpEndpoint = Annotated[AnyUrl, UrlConstraints(max_length=2048, allowed_schemes=["http", "https"])]
-
-
-class AppMode(StrEnum):
-    """Supported runtime adapter modes."""
-
-    LOCAL = "local"
-    GCP = "gcp"
-
-
-class AuthMode(StrEnum):
-    """Authentication mode paired with the runtime mode."""
-
-    LOCAL_SIGNED = "local_signed"
-    CLOUD_RUN_IAM = "cloud_run_iam"
-
-
-class VectorSearchShardSize(StrEnum):
-    """Frozen Vector Search shard-size values."""
-
-    SMALL = "SHARD_SIZE_SMALL"
-    MEDIUM = "SHARD_SIZE_MEDIUM"
-    LARGE = "SHARD_SIZE_LARGE"
+ResourceName = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 
 
 class RuntimeSettings(BaseSettings):
-    """Strict process settings loaded only from explicit values or environment."""
+    """Cloud Run runtime settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
         alias_generator=str.upper,
@@ -76,35 +52,18 @@ class RuntimeSettings(BaseSettings):
     )
 
     config_contract_version: str
-    app_mode: AppMode
-    auth_mode: AuthMode
     dev_tenant_id: TenantId
+    gcp_project_id: CloudString
+    gcp_region: CloudString
     gcs_document_bucket: BucketName
     tenant_upload_prefix: UploadPrefix
     fixed_corpus: Literal["default"]
+    pubsub_topic: VersionId
     pubsub_worker_audience: HttpEndpoint
-    local_auth_signing_key_file: Path | None = None
-    local_metadata_endpoint: HttpEndpoint | None = None
-    local_gcs_endpoint: HttpEndpoint | None = None
-    local_pubsub_endpoint: HttpEndpoint | None = None
-    local_embedding_endpoint: HttpEndpoint | None = None
-    local_vector_endpoint: HttpEndpoint | None = None
-    local_generation_endpoint: HttpEndpoint | None = None
-
-    gcp_project_id: CloudString | None = None
-    gcp_region: CloudString | None = None
-    tf_state_project_id: CloudString | None = None
-    tf_state_bucket_name: CloudString | None = None
-    tf_state_bucket_location: CloudString | None = None
-    artifact_registry_repository: CloudString | None = None
-    dev_operator_group: CloudString | None = None
-    alert_email: EmailStr | None = None
-    budget_amount_usd: Annotated[float, Field(gt=0)] | None = None
-    vector_search_shard_size: VectorSearchShardSize | None = None
-    log_retention_days: Annotated[int, Field(ge=1, le=3650)] | None = None
-    source_repository: Annotated[str, StringConstraints(min_length=1, max_length=2048)] | None = (
-        None
-    )
+    active_index_version: VersionId
+    vector_search_index_resource: ResourceName
+    vector_search_endpoint_resource: ResourceName
+    vector_search_deployed_index_id: VersionId
 
     pipeline_version: VersionId
     parser_version: VersionId
@@ -136,8 +95,7 @@ class RuntimeSettings(BaseSettings):
     worker_max_instances: Annotated[int, Field(ge=1, le=100)]
 
     @model_validator(mode="after")
-    def validate_mode(self) -> Self:
-        """Enforce mode pairing and reject unresolved cloud configuration."""
+    def validate_configuration(self) -> Self:
         if self.config_contract_version != CONTRACT_VERSION:
             raise ValueError("unsupported configuration contract version")
         if self.tenant_upload_prefix != f"tenants/{self.dev_tenant_id}/uploads":
@@ -149,76 +107,25 @@ class RuntimeSettings(BaseSettings):
         retry_window = (self.embedding_max_retries + 1) * self.dependency_timeout_seconds
         if retry_window > self.processing_deadline_seconds:
             raise ValueError("embedding retry window must fit within processing deadline")
-
-        if self.app_mode is AppMode.LOCAL:
-            if self.auth_mode is not AuthMode.LOCAL_SIGNED:
-                raise ValueError("local mode requires local_signed authentication")
-            if self.local_auth_signing_key_file is None:
-                raise ValueError("local mode requires a mounted signing-key file path")
-            if not self.local_auth_signing_key_file.is_absolute():
-                raise ValueError("local signing-key file path must be absolute")
-            local_endpoints = {
-                "LOCAL_METADATA_ENDPOINT": self.local_metadata_endpoint,
-                "LOCAL_GCS_ENDPOINT": self.local_gcs_endpoint,
-                "LOCAL_PUBSUB_ENDPOINT": self.local_pubsub_endpoint,
-                "LOCAL_EMBEDDING_ENDPOINT": self.local_embedding_endpoint,
-                "LOCAL_VECTOR_ENDPOINT": self.local_vector_endpoint,
-                "LOCAL_GENERATION_ENDPOINT": self.local_generation_endpoint,
-            }
-            missing = sorted(name for name, value in local_endpoints.items() if value is None)
-            if missing:
-                raise ValueError(f"local mode requires endpoints: {', '.join(missing)}")
-            return self
-
-        if self.auth_mode is not AuthMode.CLOUD_RUN_IAM:
-            raise ValueError("gcp mode requires cloud_run_iam authentication")
-        if self.local_auth_signing_key_file is not None:
-            raise ValueError("local signing-key configuration is forbidden in gcp mode")
-        local_endpoint_values = (
-            self.local_metadata_endpoint,
-            self.local_gcs_endpoint,
-            self.local_pubsub_endpoint,
-            self.local_embedding_endpoint,
-            self.local_vector_endpoint,
-            self.local_generation_endpoint,
-        )
-        if any(endpoint is not None for endpoint in local_endpoint_values):
-            raise ValueError("local endpoint configuration is forbidden in gcp mode")
         if self.pubsub_worker_audience.scheme != "https":
-            raise ValueError("gcp mode requires an HTTPS worker audience")
+            raise ValueError("worker audience must be an HTTPS URL")
 
-        cloud_values = {
-            "GCP_PROJECT_ID": self.gcp_project_id,
-            "GCP_REGION": self.gcp_region,
-            "TF_STATE_PROJECT_ID": self.tf_state_project_id,
-            "TF_STATE_BUCKET_NAME": self.tf_state_bucket_name,
-            "TF_STATE_BUCKET_LOCATION": self.tf_state_bucket_location,
-            "ARTIFACT_REGISTRY_REPOSITORY": self.artifact_registry_repository,
-            "DEV_OPERATOR_GROUP": self.dev_operator_group,
-            "ALERT_EMAIL": self.alert_email,
-            "BUDGET_AMOUNT_USD": self.budget_amount_usd,
-            "VECTOR_SEARCH_SHARD_SIZE": self.vector_search_shard_size,
-            "LOG_RETENTION_DAYS": self.log_retention_days,
-            "SOURCE_REPOSITORY": self.source_repository,
-            "GCS_DOCUMENT_BUCKET": self.gcs_document_bucket,
-            "TENANT_UPLOAD_PREFIX": self.tenant_upload_prefix,
-            "PUBSUB_WORKER_AUDIENCE": str(self.pubsub_worker_audience),
-        }
-        missing = sorted(name for name, value in cloud_values.items() if value is None)
-        if missing:
-            raise ValueError(f"gcp mode requires cloud values: {', '.join(missing)}")
-
-        text_values = (value for value in cloud_values.values() if isinstance(value, str))
-        if any(_PLACEHOLDER.search(value) for value in text_values):
-            raise ValueError("gcp mode rejects placeholder cloud values")
-        if _PLACEHOLDER.search(self.generation_model_id) or _PLACEHOLDER.search(
-            self.embedding_model_id
-        ):
-            raise ValueError("gcp mode rejects placeholder model IDs")
+        cloud_strings = (
+            self.gcp_project_id,
+            self.gcp_region,
+            self.gcs_document_bucket,
+            self.vector_search_index_resource,
+            self.vector_search_endpoint_resource,
+            self.vector_search_deployed_index_id,
+            self.generation_model_id,
+            self.embedding_model_id,
+        )
+        if any(_PLACEHOLDER.search(value) for value in cloud_strings):
+            raise ValueError("placeholder values are not allowed")
         if _MUTABLE_MODEL_ALIASES.search(self.generation_model_id) or _MUTABLE_MODEL_ALIASES.search(
             self.embedding_model_id
         ):
-            raise ValueError("gcp mode requires pinned model IDs")
+            raise ValueError("pinned model IDs are required")
         return self
 
 

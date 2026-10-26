@@ -483,7 +483,7 @@ def test_vertex_vector_request_has_every_restrict_and_no_call_on_missing() -> No
     client = VectorClient()
     adapter = VertexVectorIndex(
         index_client=client,
-        endpoint_client=client,
+        match_client=client,
         index_resource="projects/p/locations/us/indexes/i",
         endpoint_resource="projects/p/locations/us/indexEndpoints/e",
         deployed_index_id="deployed",
@@ -709,6 +709,9 @@ class TimeoutVector:
     def find_neighbors(self, **_: object) -> object:
         raise TimeoutError
 
+    def read_index_datapoints(self, **_: object) -> object:
+        raise TimeoutError
+
 
 def test_cloud_adapters_classify_timeouts_without_network() -> None:
     embeddings = VertexEmbeddingModel(
@@ -734,9 +737,10 @@ def test_cloud_adapters_classify_timeouts_without_network() -> None:
         generation=1,
         index_version="index-1",
     )
+    timeout_vector = TimeoutVector()
     vector = VertexVectorIndex(
-        index_client=TimeoutVector(),
-        endpoint_client=TimeoutVector(),
+        index_client=timeout_vector,
+        match_client=timeout_vector,
         index_resource="index",
         endpoint_resource="endpoint",
         deployed_index_id="deployed",

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG</title>
+    <style>
+      :root {
+        font-family: system-ui, sans-serif;
+        color: #111;
+        background: #f6f7f9;
+      }
+      body {
+        max-width: 720px;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin-bottom: 0.25rem;
+      }
+      p.sub {
+        color: #555;
+        margin-top: 0;
+      }
+      section {
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        font-weight: 600;
+        margin: 0.75rem 0 0.25rem;
+      }
+      input[type="text"],
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      button {
+        margin-top: 0.75rem;
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 4px;
+        background: #1a73e8;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .status {
+        margin-top: 0.5rem;
+        font-size: 0.9rem;
+        color: #333;
+      }
+      .answer {
+        white-space: pre-wrap;
+        line-height: 1.5;
+      }
+      .citations {
+        margin-top: 1rem;
+        font-size: 0.85rem;
+        color: #444;
+      }
+      .citations blockquote {
+        margin: 0.25rem 0 0.75rem;
+        padding-left: 0.75rem;
+        border-left: 3px solid #1a73e8;
+      }
+      .error {
+        color: #b00020;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>RAG</h1>
+    <p class="sub">Upload a .txt, .md, or .pdf, wait until it is ready, then ask a question.</p>
+
+    <section>
+      <h2>1. Add a document</h2>
+      <label for="file">File</label>
+      <input id="file" type="file" accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf" />
+      <label for="doc-id">Document ID (optional)</label>
+      <input id="doc-id" type="text" placeholder="defaults to filename" />
+      <button type="button" id="upload-btn">Upload &amp; ingest</button>
+      <div id="upload-status" class="status"></div>
+    </section>
+
+    <section>
+      <h2>2. Ask a question</h2>
+      <label for="question">Question</label>
+      <textarea id="question" rows="3" placeholder="What does the document say about…?"></textarea>
+      <button type="button" id="ask-btn">Ask</button>
+      <div id="query-status" class="status"></div>
+      <div id="answer" class="answer"></div>
+      <div id="citations" class="citations"></div>
+    </section>
+
+    <script>
+      const uploadStatus = document.getElementById("upload-status");
+      const queryStatus = document.getElementById("query-status");
+      const answerEl = document.getElementById("answer");
+      const citationsEl = document.getElementById("citations");
+
+      async function readError(res) {
+        try {
+          const body = await res.json();
+          const code = body.code ? `[${body.code}] ` : "";
+          const detail = body.detail || body.title || res.statusText;
+          return `${code}${detail}`;
+        } catch {
+          return res.statusText;
+        }
+      }
+
+      async function pollDocument(id) {
+        for (let i = 0; i < 120; i++) {
+          const res = await fetch(`/v1/documents/${encodeURIComponent(id)}`);
+          if (!res.ok) throw new Error(await readError(res));
+          const doc = await res.json();
+          uploadStatus.textContent = `Status: ${doc.status}${doc.chunk_count != null ? ` (${doc.chunk_count} chunks)` : ""}`;
+          if (doc.status === "READY") return doc;
+          if (doc.status === "FAILED") throw new Error(doc.failure?.code || "Ingestion failed");
+          await new Promise((r) => setTimeout(r, 3000));
+        }
+        throw new Error("Timed out waiting for READY");
+      }
+
+      document.getElementById("upload-btn").addEventListener("click", async () => {
+        const fileInput = document.getElementById("file");
+        const docId = document.getElementById("doc-id").value.trim();
+        if (!fileInput.files?.length) {
+          uploadStatus.textContent = "Choose a file first.";
+          uploadStatus.className = "status error";
+          return;
+        }
+        uploadStatus.className = "status";
+        uploadStatus.textContent = "Uploading…";
+        document.getElementById("upload-btn").disabled = true;
+        try {
+          const form = new FormData();
+          form.append("file", fileInput.files[0]);
+          if (docId) form.append("document_id", docId);
+          const res = await fetch("/v1/documents/upload", { method: "POST", body: form });
+          if (!res.ok) throw new Error(await readError(res));
+          const doc = await res.json();
+          uploadStatus.textContent = `Registered ${doc.document_id}. Ingesting…`;
+          await pollDocument(doc.document_id);
+          uploadStatus.textContent += " — you can query now.";
+        } catch (err) {
+          uploadStatus.textContent = String(err.message || err);
+          uploadStatus.className = "status error";
+        } finally {
+          document.getElementById("upload-btn").disabled = false;
+        }
+      });
+
+      document.getElementById("ask-btn").addEventListener("click", async () => {
+        const question = document.getElementById("question").value.trim();
+        if (!question) {
+          queryStatus.textContent = "Enter a question.";
+          queryStatus.className = "status error";
+          return;
+        }
+        queryStatus.className = "status";
+        queryStatus.textContent = "Thinking…";
+        answerEl.textContent = "";
+        citationsEl.innerHTML = "";
+        document.getElementById("ask-btn").disabled = true;
+        try {
+          const res = await fetch("/v1/query", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question, top_k: 8 }),
+          });
+          if (!res.ok) throw new Error(await readError(res));
+          const data = await res.json();
+          queryStatus.textContent = data.abstained ? "No grounded answer (abstained)." : "Done.";
+          answerEl.textContent = data.answer || "(no answer)";
+          if (data.citations?.length) {
+            citationsEl.innerHTML = data.citations
+              .map(
+                (c) =>
+                  `<div><strong>${c.document_id}</strong> — chunk ${c.chunk_id}<blockquote>${c.quote}</blockquote></div>`
+              )
+              .join("");
+          }
+        } catch (err) {
+          queryStatus.textContent = String(err.message || err);
+          queryStatus.className = "status error";
+        } finally {
+          document.getElementById("ask-btn").disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

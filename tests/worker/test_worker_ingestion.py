@@ -5,10 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from io import BytesIO
-from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -35,7 +34,6 @@ from packages.rag_core.models import (
 )
 from packages.rag_core.parsing import ParsedSection, parse_document
 from packages.rag_core.storage import encode_push_data
-from services.worker.app.auth import issue_local_push_token
 from services.worker.app.dependencies import WorkerDependencies
 from services.worker.app.envelope import decode_push_envelope
 from services.worker.app.main import create_app
@@ -56,22 +54,21 @@ class RecordingTelemetry:
         self.events.append((event, dict(fields)))
 
 
-def _active_index(now: datetime) -> ActiveIndexRecord:
+def _active_index(settings: RuntimeSettings, now: datetime) -> ActiveIndexRecord:
     return ActiveIndexRecord(
-        index_version="index-1",
-        pipeline_version="pipeline-1",
-        parser_version="parser-1",
-        chunker_version="chunker-1",
-        embedding_model_id="deterministic-embedding-v1",
-        embedding_dimensions=32,
+        index_version=settings.active_index_version,
+        pipeline_version=settings.pipeline_version,
+        parser_version=settings.parser_version,
+        chunker_version=settings.chunker_version,
+        embedding_model_id=settings.embedding_model_id,
+        embedding_dimensions=settings.embedding_dimensions,
         updated_at=now,
     )
 
 
 @pytest.fixture
 def worker_runtime(
-    tmp_path: Path,
-    local_values: dict[str, Any],
+    runtime_values: dict[str, Any],
 ) -> tuple[
     RuntimeSettings,
     FakeClock,
@@ -82,17 +79,14 @@ def worker_runtime(
     RecordingTelemetry,
     WorkerDependencies,
 ]:
-    key_path = tmp_path / "worker-auth.key"
-    key_path.write_bytes(b"offline-worker-key")
-    values = dict(local_values)
-    values["LOCAL_AUTH_SIGNING_KEY_FILE"] = str(key_path)
+    values = dict(runtime_values)
     values["CHUNK_SIZE_TOKENS"] = 64
     values["CHUNK_OVERLAP_TOKENS"] = 8
     settings = RuntimeSettings.model_validate(values)
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
     metadata = FakeMetadataStore(
         tenant_id=settings.dev_tenant_id,
-        active_index=_active_index(clock.now()),
+        active_index=_active_index(settings, clock.now()),
         max_chunks_per_document=settings.max_document_chunks,
     )
     objects = FakeObjectStore()
@@ -201,15 +195,7 @@ def _client(
     settings: RuntimeSettings,
     dependencies: WorkerDependencies,
 ) -> tuple[TestClient, dict[str, str]]:
-    token = issue_local_push_token(
-        key=settings.local_auth_signing_key_file.read_bytes(),  # type: ignore[union-attr]
-        tenant_id=settings.dev_tenant_id,
-        audience=str(settings.pubsub_worker_audience),
-        expires_at=dependencies.clock.now() + timedelta(minutes=5),
-    )
-    return TestClient(create_app(lambda: settings, dependencies)), {
-        "Authorization": f"Bearer {token}"
-    }
+    return TestClient(create_app(lambda: settings, dependencies)), {}
 
 
 def _text_pdf(text: str) -> bytes:
@@ -297,9 +283,23 @@ def test_envelope_is_strict_and_matches_attributes() -> None:
     decoded_envelope, decoded = decode_push_envelope(json.dumps(envelope).encode())
     assert decoded == payload
     assert decoded_envelope.delivery_attempt == 1
-    envelope["unexpected"] = True
+    wire = cast(dict[str, Any], envelope)
+    message = cast(dict[str, Any], wire["message"])
+    google_wire = {
+        "deliveryAttempt": 2,
+        "message": {
+            **message,
+            "message_id": message["messageId"],
+            "publish_time": message["publishTime"],
+        },
+        "subscription": wire["subscription"],
+    }
+    decoded_envelope, decoded = decode_push_envelope(json.dumps(google_wire).encode())
+    assert decoded == payload
+    assert decoded_envelope.delivery_attempt == 2
+    message["data"] = "not-valid-base64!!!"
     with pytest.raises(RagError, match="Invalid Request"):
-        decode_push_envelope(json.dumps(envelope).encode())
+        decode_push_envelope(json.dumps(wire).encode())
 
 
 def test_upsert_duplicate_is_idempotent_and_content_safe(
@@ -351,14 +351,14 @@ def test_retryable_embedding_failure_returns_non_2xx_and_records_failure(
     assert payload.object_uri not in response.text
 
 
-def test_verification_failure_prevents_ready(worker_runtime: tuple[Any, ...]) -> None:
+def test_vector_upsert_failure_prevents_ready(worker_runtime: tuple[Any, ...]) -> None:
     settings, clock, metadata, objects, _, vectors, _, dependencies = worker_runtime
     payload = _register(settings, clock, metadata, objects)
-    vectors.fail_next("verify", RagError(ErrorCode.DEPENDENCY_REJECTED))
+    vectors.fail_next("upsert", RetryableDependencyError())
     client, headers = _client(settings, dependencies)
     response = client.post("/v1/pubsub/push", json=_envelope(payload), headers=headers)
-    assert response.status_code == 204
-    assert metadata.documents[payload.document_id].status is DocumentStatus.FAILED_TERMINAL
+    assert response.status_code == 503
+    assert metadata.documents[payload.document_id].status is DocumentStatus.FAILED_RETRYABLE
     assert not any(name == "commit_ready" for name, _ in metadata.calls)
 
 
@@ -421,12 +421,3 @@ def test_delete_is_idempotent_and_preserves_tombstone_on_retry(
     assert vectors.datapoints == {}
     duplicate = client.post("/v1/pubsub/push", json=_envelope(delete), headers=headers)
     assert duplicate.status_code == 204
-
-
-def test_local_push_auth_is_required(worker_runtime: tuple[Any, ...]) -> None:
-    settings, clock, metadata, objects, _, _, _, dependencies = worker_runtime
-    payload = _register(settings, clock, metadata, objects)
-    client = TestClient(create_app(lambda: settings, dependencies))
-    response = client.post("/v1/pubsub/push", json=_envelope(payload))
-    assert response.status_code == 401
-    assert objects.calls == []

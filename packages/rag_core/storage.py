@@ -22,6 +22,16 @@ from packages.rag_core.policy import GcsObjectPolicy
 class ObjectStore(Protocol):
     def stat(self, canonical_uri: str, deadline: float) -> ObjectMetadata: ...
 
+    def write_new(
+        self,
+        *,
+        object_name: str,
+        data: bytes,
+        content_type: MediaType,
+        checksum_sha256: str,
+        deadline: float,
+    ) -> ObjectMetadata: ...
+
     def read_bounded(
         self, canonical_uri: str, object_generation: int, max_bytes: int, deadline: float
     ) -> bytes: ...
@@ -79,6 +89,48 @@ class GcsObjectStore:
             if error.__class__.__name__ == "PreconditionFailed":
                 raise RagError(ErrorCode.STALE_GENERATION) from error
             raise RetryableDependencyError() from error
+
+    def write_new(
+        self,
+        *,
+        object_name: str,
+        data: bytes,
+        content_type: MediaType,
+        checksum_sha256: str,
+        deadline: float,
+    ) -> ObjectMetadata:
+        if deadline <= 0 or not object_name or not checksum_sha256:
+            raise RagError(ErrorCode.INVALID_REQUEST)
+        if len(data) > self.policy.max_bytes:
+            raise RagError(ErrorCode.DOCUMENT_TOO_LARGE)
+        upload_prefix = f"{self.policy.prefix}uploads/"
+        if not object_name.startswith(upload_prefix):
+            raise RagError(ErrorCode.ACCESS_DENIED)
+        canonical_uri = f"gs://{self.policy.bucket}/{object_name}"
+        blob = self.client.bucket(self.policy.bucket).blob(object_name)
+        try:
+            blob.metadata = {"sha256": checksum_sha256}
+            blob.upload_from_string(
+                data,
+                content_type=content_type.value,
+                timeout=deadline,
+                retry=None,
+            )
+            blob.reload(timeout=deadline, retry=None)
+        except TimeoutError as error:
+            raise RetryableDependencyError(ErrorCode.DEPENDENCY_TIMEOUT) from error
+        except Exception as error:
+            raise RetryableDependencyError() from error
+        return ObjectMetadata(
+            canonical_uri=canonical_uri,
+            bucket=self.policy.bucket,
+            name=object_name,
+            object_generation=int(blob.generation),
+            size=len(data),
+            content_type=content_type,
+            checksum_sha256=checksum_sha256,
+            updated_at=blob.updated,
+        )
 
     def read_bounded(
         self, canonical_uri: str, object_generation: int, max_bytes: int, deadline: float

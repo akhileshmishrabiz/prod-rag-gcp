@@ -33,6 +33,7 @@ from packages.rag_core.models import (
     IngestionMessage,
     IngestionOperation,
     Lease,
+    MediaType,
     ObjectMetadata,
     Provenance,
     PublishReceipt,
@@ -290,6 +291,46 @@ class FakeObjectStore(FakeBase):
             return self.objects[canonical_uri][0]
         except KeyError as error:
             raise RagError(ErrorCode.DOCUMENT_NOT_FOUND) from error
+
+    def write_new(
+        self,
+        *,
+        object_name: str,
+        data: bytes,
+        content_type: MediaType,
+        checksum_sha256: str,
+        deadline: float,
+    ) -> ObjectMetadata:
+        self._record(
+            "write_new",
+            object_name=object_name,
+            size=len(data),
+            content_type=content_type,
+            deadline=deadline,
+        )
+        if deadline <= 0:
+            raise RagError(ErrorCode.INVALID_REQUEST)
+        bucket = "dev-rag-documents"
+        canonical_uri = f"gs://{bucket}/{object_name}"
+        generation = (
+            max(
+                (meta.object_generation for meta, _ in self.objects.values()),
+                default=0,
+            )
+            + 1
+        )
+        metadata = ObjectMetadata(
+            canonical_uri=canonical_uri,
+            bucket=bucket,
+            name=object_name,
+            object_generation=generation,
+            size=len(data),
+            content_type=content_type,
+            checksum_sha256=checksum_sha256,
+            updated_at=datetime.now(UTC),
+        )
+        self.put(metadata, data)
+        return metadata
 
     def read_bounded(
         self, canonical_uri: str, object_generation: int, max_bytes: int, deadline: float

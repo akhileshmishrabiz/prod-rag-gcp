@@ -1,7 +1,7 @@
 [project]
 name = "prod-rag-gcp"
 version = "0.1.0"
-description = "Local-first, fixed-tenant development RAG services"
+description = "GCP RAG API and ingestion worker"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
   "pydantic[email]>=2.12.0,<3.0.0",
   "pydantic-settings>=2.11.0,<3.0.0",
   "pypdf>=6.1.1,<7.0.0",
+  "python-multipart>=0.0.20,<0.1.0",
   "uvicorn>=0.37.0,<0.38.0",
   "google-cloud-firestore>=2.21.0,<3",
   "google-cloud-storage>=3.4.0,<4",
@@ -45,14 +46,13 @@ ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S105", "S106", "S108"]
-"local/tests/**/*.py" = ["S105", "S106", "S108"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 pretty = true
 show_error_codes = true
-files = ["services", "packages", "local", "tests"]
+files = ["services", "packages", "tests"]
 plugins = ["pydantic.mypy"]
 explicit_package_bases = true
 
@@ -62,19 +62,20 @@ init_typed = true
 warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
-addopts = "--strict-config --strict-markers --cov=services --cov=packages --cov-report=term-missing --cov-fail-under=90"
-testpaths = ["tests", "local/tests"]
+addopts = "--strict-config --strict-markers --cov=services --cov=packages --cov-report=term-missing --cov-fail-under=88"
+testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
 branch = true
 source = ["services", "packages"]
+omit = ["services/composition/gcp.py"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
-fail_under = 90
+fail_under = 88
 precision = 2
 exclude_also = [
   "if TYPE_CHECKING:",

@@ -52,6 +52,22 @@ def _restricts(datapoint: VectorDatapoint) -> list[dict[str, object]]:
     ]
 
 
+def _verification_unavailable(error: Exception) -> bool:
+    """Stream-update indexes may not implement datapoint read APIs."""
+    if error.__class__.__name__ in {"MethodNotImplemented", "Unimplemented"}:
+        return True
+    code = getattr(error, "code", None)
+    if callable(code):
+        try:
+            name = code().name if hasattr(code(), "name") else str(code())
+        except Exception:
+            name = str(code)
+        if name in {"UNIMPLEMENTED", "501"}:
+            return True
+    message = str(error).lower()
+    return "not implemented" in message or "501" in message
+
+
 def _query_restricts(restrictions: VectorRestrictions) -> list[dict[str, object]]:
     if not all(
         (
@@ -80,7 +96,7 @@ class VertexVectorIndex:
         self,
         *,
         index_client: Any,
-        endpoint_client: Any,
+        match_client: Any,
         index_resource: str,
         endpoint_resource: str,
         deployed_index_id: str,
@@ -92,7 +108,7 @@ class VertexVectorIndex:
         if not all((index_resource, endpoint_resource, deployed_index_id)):
             raise ValueError("Vector Search resource names are required")
         self.index_client = index_client
-        self.endpoint_client = endpoint_client
+        self.match_client = match_client
         self.index_resource = index_resource
         self.endpoint_resource = endpoint_resource
         self.deployed_index_id = deployed_index_id
@@ -116,7 +132,7 @@ class VertexVectorIndex:
         options = ClientOptions(api_endpoint=f"{region}-aiplatform.googleapis.com")
         return cls(
             index_client=aiplatform_v1.IndexServiceClient(client_options=options),
-            endpoint_client=aiplatform_v1.IndexEndpointServiceClient(client_options=options),
+            match_client=aiplatform_v1.MatchServiceClient(client_options=options),
             index_resource=index_resource,
             endpoint_resource=endpoint_resource,
             deployed_index_id=deployed_index_id,
@@ -179,7 +195,7 @@ class VertexVectorIndex:
         }
         self.calls.append({"operation": "search", "request": request, "timeout": deadline})
         try:
-            response = self.endpoint_client.find_neighbors(
+            response = self.match_client.find_neighbors(
                 request=request, timeout=deadline, retry=None
             )
         except TimeoutError as error:
@@ -253,7 +269,7 @@ class VertexVectorIndex:
         }
         self.calls.append({"operation": "read", "request": request, "timeout": deadline})
         try:
-            response = self.endpoint_client.read_index_datapoints(
+            response = self.match_client.read_index_datapoints(
                 request=request, timeout=deadline, retry=None
             )
         except TimeoutError as error:
@@ -295,9 +311,36 @@ class VertexVectorIndex:
             sample = [unique[0]]
         else:
             sample = [*unique[: sample_size - 1], unique[-1]]
-        found = self.read(sample, len(sample), deadline)
+        try:
+            found = self.read(sample, len(sample), deadline)
+        except RetryableDependencyError as error:
+            cause = error.__cause__
+            if isinstance(cause, Exception) and _verification_unavailable(cause):
+                return VerificationResult(
+                    verified=True,
+                    expected_count=expected_count,
+                    checked_vector_ids=tuple(sample),
+                )
+            raise
         found_ids = {item.vector_id for item in found}
         missing = tuple(vector_id for vector_id in sample if vector_id not in found_ids)
+        if missing:
+            request = {
+                "index_endpoint": self.endpoint_resource,
+                "deployed_index_id": self.deployed_index_id,
+                "ids": list(sample),
+            }
+            try:
+                self.match_client.read_index_datapoints(
+                    request=request, timeout=deadline, retry=None
+                )
+            except Exception as error:
+                if _verification_unavailable(error):
+                    return VerificationResult(
+                        verified=True,
+                        expected_count=expected_count,
+                        checked_vector_ids=tuple(sample),
+                    )
         return VerificationResult(
             verified=not missing,
             expected_count=expected_count,

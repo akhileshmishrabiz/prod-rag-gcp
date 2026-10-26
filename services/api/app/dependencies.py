@@ -1,4 +1,4 @@
-"""Injectable API adapter bundle and API-owned policy limits."""
+"""Injectable API adapter bundle."""
 
 from __future__ import annotations
 
@@ -23,17 +23,6 @@ class IdGenerator(Protocol):
 
 
 @dataclass(frozen=True)
-class ApiPolicy:
-    """Isolated local authentication policy."""
-
-    local_test_identity: str = "local-rag-tester"
-
-    def __post_init__(self) -> None:
-        if not self.local_test_identity:
-            raise ValueError("local test identity must be non-empty")
-
-
-@dataclass(frozen=True)
 class ApiDependencies:
     metadata: MetadataStore
     objects: ObjectStore
@@ -41,4 +30,3 @@ class ApiDependencies:
     retrieval: RetrievalService
     clock: Clock
     ids: IdGenerator
-    policy: ApiPolicy

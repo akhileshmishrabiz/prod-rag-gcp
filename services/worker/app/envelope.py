@@ -17,17 +17,19 @@ MAX_PUSH_BODY_BYTES = 131_072
 MAX_DECODED_PAYLOAD_BYTES = 32_768
 
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class _PubSubWireModel(BaseModel):
+    """Pub/Sub push JSON includes duplicate snake_case and camelCase fields."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
-class PushAttributes(_StrictModel):
+class PushAttributes(_PubSubWireModel):
     contract_version: str
     operation: IngestionOperation
     trace_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
 
 
-class PushMessage(_StrictModel):
+class PushMessage(_PubSubWireModel):
     data: str
     message_id: Annotated[
         str,
@@ -41,7 +43,7 @@ class PushMessage(_StrictModel):
     attributes: PushAttributes
 
 
-class PushEnvelope(_StrictModel):
+class PushEnvelope(_PubSubWireModel):
     message: PushMessage
     subscription: Annotated[str, StringConstraints(min_length=1, max_length=1024)]
     delivery_attempt: Annotated[int, Field(ge=1)] = Field(default=1, alias="deliveryAttempt")

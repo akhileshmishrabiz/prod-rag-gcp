@@ -1,6 +1,5 @@
-"""Shared deterministic foundation fixtures."""
+"""Shared deterministic test fixtures."""
 
-from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -8,24 +7,28 @@ import pytest
 from packages.rag_core.config import RuntimeSettings
 
 
-def local_config() -> dict[str, Any]:
-    """Return the explicit local-safe profile from contract v1.0.0."""
+def runtime_config() -> dict[str, Any]:
+    """Minimal valid runtime profile for unit tests."""
     return {
         "CONFIG_CONTRACT_VERSION": "1.0.0",
-        "APP_MODE": "local",
-        "AUTH_MODE": "local_signed",
         "DEV_TENANT_ID": "dev-tenant",
-        "LOCAL_AUTH_SIGNING_KEY_FILE": "/run/secrets/local-auth.key",
+        "GCP_PROJECT_ID": "my-dev-project",
+        "GCP_REGION": "us-central1",
         "GCS_DOCUMENT_BUCKET": "dev-rag-documents",
         "TENANT_UPLOAD_PREFIX": "tenants/dev-tenant/uploads",
         "FIXED_CORPUS": "default",
-        "PUBSUB_WORKER_AUDIENCE": "http://worker:8080",
+        "PUBSUB_TOPIC": "ingestion",
+        "PUBSUB_WORKER_AUDIENCE": "https://worker.example.com",
+        "ACTIVE_INDEX_VERSION": "index-1",
+        "VECTOR_SEARCH_INDEX_RESOURCE": "projects/p/locations/us-central1/indexes/i",
+        "VECTOR_SEARCH_ENDPOINT_RESOURCE": "projects/p/locations/us-central1/indexEndpoints/e",
+        "VECTOR_SEARCH_DEPLOYED_INDEX_ID": "rag_deployed",
         "PIPELINE_VERSION": "pipeline-1",
         "PARSER_VERSION": "parser-1",
         "CHUNKER_VERSION": "chunker-1",
-        "GENERATION_MODEL_ID": "deterministic-generator-v1",
-        "EMBEDDING_MODEL_ID": "deterministic-embedding-v1",
-        "EMBEDDING_DIMENSIONS": 32,
+        "GENERATION_MODEL_ID": "gemini-2.5-flash-001",
+        "EMBEDDING_MODEL_ID": "text-embedding-005",
+        "EMBEDDING_DIMENSIONS": 768,
         "MAX_DOCUMENT_BYTES": 10_485_760,
         "MAX_DOCUMENT_CHUNKS": 1000,
         "MAX_EMBEDDING_BATCH_SIZE": 100,
@@ -48,20 +51,14 @@ def local_config() -> dict[str, Any]:
         "WORKER_CONCURRENCY": 4,
         "API_MAX_INSTANCES": 2,
         "WORKER_MAX_INSTANCES": 2,
-        "LOCAL_METADATA_ENDPOINT": "http://metadata:8080",
-        "LOCAL_GCS_ENDPOINT": "http://gcs:4443",
-        "LOCAL_PUBSUB_ENDPOINT": "http://pubsub:8085",
-        "LOCAL_EMBEDDING_ENDPOINT": "http://embeddings:8080",
-        "LOCAL_VECTOR_ENDPOINT": "http://vector:8080",
-        "LOCAL_GENERATION_ENDPOINT": "http://generation:8080",
     }
 
 
 @pytest.fixture
-def local_values() -> dict[str, Any]:
-    return local_config()
+def runtime_values() -> dict[str, Any]:
+    return runtime_config()
 
 
 @pytest.fixture
-def local_settings(local_values: Mapping[str, Any]) -> RuntimeSettings:
-    return RuntimeSettings.model_validate(local_values)
+def runtime_settings(runtime_values: dict[str, Any]) -> RuntimeSettings:
+    return RuntimeSettings.model_validate(runtime_values)

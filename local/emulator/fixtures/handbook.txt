@@ -1,5 +1,0 @@
-# Local Engineering Handbook
-
-The deterministic local RAG environment uses the fixed `dev-tenant` tenant.
-Every vector search requires tenant, corpus, index version, and active-generation
-filters. Deleting a document creates a tombstone before asynchronous cleanup.
