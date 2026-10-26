@@ -1,0 +1,26 @@
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS build
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+WORKDIR /app
+RUN python -m pip install --no-cache-dir uv==0.9.5
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+FROM python:3.12.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS runtime
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app
+WORKDIR /app
+COPY --from=build --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app packages /app/packages
+COPY --chown=app:app services /app/services
+COPY --chown=app:app local /app/local
+RUN chmod 0555 /app/local/scripts/assert-local-env.sh
+USER 10001:10001
+EXPOSE 8080
+ENTRYPOINT ["/app/local/scripts/assert-local-env.sh"]
+CMD ["uvicorn", "local.runtime.api:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -218,3 +218,32 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local environment files (retain the documented example)
+.env.*
+!.env.example
+
+# Credentials and private keys
+credentials/
+credentials.json
+service-account*.json
+application_default_credentials.json
+*.pem
+*.key
+
+# Terraform local state, plans, backends, and variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+*.backend.hcl
+crash.log
+crash.*.log
+
+# Generated test and analysis artifacts
+junit*.xml
+test-results/
+reports/
+bandit-report.*

@@ -1,0 +1,502 @@
+openapi: 3.1.0
+info:
+  title: Development RAG API
+  version: 1.0.0
+  description: Fixed-tenant, IAM-authenticated development API. The tenant is server configured and never caller selectable.
+servers:
+  - url: https://SERVICE_URL_PLACEHOLDER
+    description: Cloud Run URL; unresolved until deployment
+security:
+  - googleCloudIam: []
+tags:
+  - name: probes
+  - name: documents
+  - name: query
+paths:
+  /healthz:
+    get:
+      tags: [probes]
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProbeResponse"
+  /readyz:
+    get:
+      tags: [probes]
+      operationId: readiness
+      security: []
+      responses:
+        "200":
+          description: Process is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProbeResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/documents:
+    post:
+      tags: [documents]
+      operationId: registerDocument
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDocumentRequest"
+      responses:
+        "202":
+          description: Registration accepted for asynchronous ingestion
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/ContentTooLarge"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/documents/{document_id}:
+    parameters:
+      - $ref: "#/components/parameters/DocumentId"
+      - $ref: "#/components/parameters/RequestId"
+    get:
+      tags: [documents]
+      operationId: getDocument
+      responses:
+        "200":
+          description: Current document lifecycle state
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [documents]
+      operationId: deleteDocument
+      responses:
+        "202":
+          description: Tombstone is committed synchronously; asynchronous physical cleanup is pending
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/query:
+    post:
+      tags: [query]
+      operationId: query
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: Grounded answer or explicit abstention
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  securitySchemes:
+    googleCloudIam:
+      type: openIdConnect
+      openIdConnectUrl: https://accounts.google.com/.well-known/openid-configuration
+      description: Cloud Run IAM identity token. Authorization is enforced before application routing.
+  parameters:
+    DocumentId:
+      name: document_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/DocumentId"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Optional caller correlation ID; invalid values are replaced. It conveys no authorization.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:/-]+$"
+  headers:
+    RequestId:
+      description: Request correlation ID generated or accepted by the service
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource is absent or not visible in the configured tenant
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Resource generation or lifecycle conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ContentTooLarge:
+      description: Configured document byte limit exceeded
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unprocessable:
+      description: Input type, encoding, or content cannot be processed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    RateLimited:
+      description: A bounded concurrency or quota limit was reached
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ServiceUnavailable:
+      description: A required dependency is unavailable
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    ProbeResponse:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    DocumentId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    Corpus:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: "^[a-z][a-z0-9_-]*$"
+      description: Must equal server-configured FIXED_CORPUS; omission defaults to default.
+    RegisterDocumentRequest:
+      type: object
+      additionalProperties: false
+      required: [document_id, object_uri, object_generation, media_type, checksum_sha256, idempotency_key]
+      properties:
+        document_id:
+          $ref: "#/components/schemas/DocumentId"
+        corpus:
+          $ref: "#/components/schemas/Corpus"
+          default: default
+        object_uri:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          pattern: "^gs://[^\\s]+$"
+          description: Canonical URI in the managed bucket and fixed tenant upload prefix; signed URLs and credentials are forbidden.
+        object_generation:
+          type: integer
+          minimum: 1
+          description: Immutable source GCS object generation, distinct from document lifecycle generation.
+        media_type:
+          type: string
+          enum: [text/plain, text/markdown, application/pdf]
+        checksum_sha256:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+    Document:
+      type: object
+      additionalProperties: false
+      required:
+        - document_id
+        - corpus
+        - source_uri
+        - object_generation
+        - generation
+        - status
+        - tombstoned
+        - created_at
+        - updated_at
+        - ready_at
+        - deleted_at
+        - parser_version
+        - chunker_version
+        - embedding_model_version
+        - pipeline_version
+        - index_version
+        - chunk_count
+        - failure
+      properties:
+        document_id:
+          $ref: "#/components/schemas/DocumentId"
+        corpus:
+          $ref: "#/components/schemas/Corpus"
+        source_uri:
+          type: string
+          pattern: "^gs://[^\\s]+$"
+          maxLength: 2048
+        object_generation:
+          type: integer
+          minimum: 1
+        generation:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, READY, FAILED_RETRYABLE, FAILED_TERMINAL, DELETE_PENDING, DELETED]
+        tombstoned:
+          type: boolean
+        failure:
+          oneOf:
+            - $ref: "#/components/schemas/SanitizedFailure"
+            - type: "null"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        ready_at:
+          type: [string, "null"]
+          format: date-time
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+        parser_version:
+          type: [string, "null"]
+          maxLength: 64
+        chunker_version:
+          type: [string, "null"]
+          maxLength: 64
+        embedding_model_version:
+          type: [string, "null"]
+          maxLength: 256
+        pipeline_version:
+          type: string
+          minLength: 1
+          maxLength: 64
+        index_version:
+          type: [string, "null"]
+          maxLength: 64
+        chunk_count:
+          type: [integer, "null"]
+          minimum: 0
+      allOf:
+        - if:
+            properties:
+              status:
+                const: READY
+            required: [status]
+          then:
+            properties:
+              ready_at:
+                type: string
+                format: date-time
+              parser_version:
+                type: string
+                minLength: 1
+              chunker_version:
+                type: string
+                minLength: 1
+              embedding_model_version:
+                type: string
+                minLength: 1
+              index_version:
+                type: string
+                minLength: 1
+              chunk_count:
+                type: integer
+                minimum: 0
+    QueryRequest:
+      type: object
+      additionalProperties: false
+      required: [question]
+      properties:
+        corpus:
+          $ref: "#/components/schemas/Corpus"
+          default: default
+        question:
+          type: string
+          minLength: 1
+          maxLength: 16000
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 8
+    QueryResponse:
+      type: object
+      additionalProperties: false
+      required: [answer, citations, abstained, trace_id, model_version, index_generation]
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        abstained:
+          type: boolean
+        trace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        model_version:
+          type: string
+          minLength: 1
+          maxLength: 256
+        index_generation:
+          type: string
+          minLength: 1
+          maxLength: 64
+      allOf:
+        - if:
+            properties:
+              abstained:
+                const: true
+            required: [abstained]
+          then:
+            properties:
+              citations:
+                maxItems: 0
+        - if:
+            properties:
+              abstained:
+                const: false
+            required: [abstained]
+          then:
+            properties:
+              answer:
+                minLength: 1
+              citations:
+                minItems: 1
+    Citation:
+      type: object
+      additionalProperties: false
+      required: [document_id, chunk_id, source_uri, quote]
+      properties:
+        document_id:
+          $ref: "#/components/schemas/DocumentId"
+        chunk_id:
+          type: string
+          minLength: 1
+          maxLength: 256
+        source_uri:
+          type: string
+          pattern: "^gs://[^\\s]+$"
+          maxLength: 2048
+        page:
+          type: integer
+          minimum: 1
+        quote:
+          type: string
+          minLength: 1
+          maxLength: 2000
+    SanitizedFailure:
+      type: object
+      additionalProperties: false
+      required: [code, retryable]
+      properties:
+        code:
+          type: string
+          pattern: "^[A-Z][A-Z0-9_]*$"
+        retryable:
+          type: boolean
+    Error:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, trace_id, request_id, retryable]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+          pattern: "^[A-Z][A-Z0-9_]*$"
+        detail:
+          type: string
+          maxLength: 500
+          description: Sanitized detail only; never raw content, prompts, answers, credentials, or dependency payloads.
+        trace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        retryable:
+          type: boolean
